@@ -1,15 +1,46 @@
 from tempfile import NamedTemporaryFile
 from fastapi.responses import RedirectResponse
 from langchain.chains.llm import LLMChain
-from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings, OpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langserve import add_routes
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from starlette import status
 from starlette.responses import JSONResponse
+from fastapi.security import OAuth2PasswordBearer
+from google.oauth2 import id_token
+from google.auth.transport import requests
+from . import config  # Relative import
 
-app = FastAPI()
+app = FastAPI(
+    title="LangChain Server",
+    version="1.0",
+)
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+CLIENT_ID = config.CLIENT_ID
+
+
+def verify_token(token: str):
+    try:
+        id_info = id_token.verify_oauth2_token(token, requests.Request(), CLIENT_ID)
+        if id_info['iss'] not in ['accounts.google.com', 'https://accounts.google.com']:
+            raise ValueError('Wrong issuer.')
+        return id_info
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from e
+
+
+@app.get("/api/protected")
+async def protected_route(token: str = Depends(oauth2_scheme)):
+    user_info = verify_token(token)
+    return {"message": "Hello, " + user_info["name"]}
 
 
 @app.get("/")
@@ -22,6 +53,7 @@ add_routes(
     ChatOpenAI(),
     path="/openai",
 )
+
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
@@ -41,6 +73,7 @@ async def upload_file(file: UploadFile = File(...)):
         loader = TextLoader(tmp_file_path)
     else:
         print('Document format is not supported!')
+        return HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
 
     documents = loader.load()
 
