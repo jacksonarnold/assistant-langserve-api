@@ -9,9 +9,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from starlette import status
 from starlette.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer
-from google.oauth2 import id_token
-from google.auth.transport import requests
-from . import config  # Relative import
+from .auth import verify_token
 
 app = FastAPI(
     title="LangChain Server",
@@ -19,22 +17,6 @@ app = FastAPI(
 )
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-
-CLIENT_ID = config.CLIENT_ID
-
-
-def verify_token(token: str = Depends(oauth2_scheme)):
-    try:
-        id_info = id_token.verify_oauth2_token(token, requests.Request(), CLIENT_ID)
-        if id_info['iss'] not in ['accounts.google.com', 'https://accounts.google.com']:
-            raise ValueError('Wrong issuer.')
-        return id_info
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token",
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from e
 
 
 # Example function using dependency parameter if user info IS needed beyond authentication
