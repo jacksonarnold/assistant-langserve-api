@@ -23,7 +23,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 CLIENT_ID = config.CLIENT_ID
 
 
-def verify_token(token: str):
+def verify_token(token: str = Depends(oauth2_scheme)):
     try:
         id_info = id_token.verify_oauth2_token(token, requests.Request(), CLIENT_ID)
         if id_info['iss'] not in ['accounts.google.com', 'https://accounts.google.com']:
@@ -37,10 +37,16 @@ def verify_token(token: str):
         ) from e
 
 
+# Example function using dependency parameter if user info IS needed beyond authentication
 @app.get("/api/protected")
-async def protected_route(token: str = Depends(oauth2_scheme)):
-    user_info = verify_token(token)
+async def protected_route(user_info: dict = Depends(verify_token)):
     return {"message": "Hello, " + user_info["name"]}
+
+
+# Example function using dependency tag if user info is not needed beyond authentication
+@app.get("/api/other-protected", dependencies=[Depends(verify_token)])
+async def other_protected_route():
+    return {"message": "Hello, person"}
 
 
 @app.get("/")
