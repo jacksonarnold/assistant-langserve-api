@@ -36,6 +36,10 @@ async def redirect_root_to_docs():
     return RedirectResponse("/docs")
 
 
+@app.get("/test")
+async def test():
+    return {"message": "Hello, world"}
+
 add_routes(
     app,
     ChatOpenAI(),
