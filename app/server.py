@@ -10,6 +10,11 @@ from starlette import status
 from starlette.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer
 from .auth import verify_token
+import firebase_admin
+from firebase_admin import credentials
+
+cred = credentials.Certificate("../serviceAccountKey.json")
+firebase_admin.initialize_app(cred)
 
 app = FastAPI(
     title="LangChain Server",
