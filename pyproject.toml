@@ -21,6 +21,7 @@ pypdf = "^4.2.0"
 google-auth = "^2.29.0"
 requests = "^2.31.0"
 python-dotenv = "^1.0.1"
+langchain-nvidia-ai-endpoints = "^0.1.1"
 
 
 [tool.poetry.group.dev.dependencies]

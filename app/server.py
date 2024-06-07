@@ -16,13 +16,24 @@ app = FastAPI(
     version="1.0",
 )
 
+# Set all CORS enabled origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
+
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
 # Example function using dependency parameter if user info IS needed beyond authentication
 @app.get("/api/protected")
 async def protected_route(user_info: dict = Depends(verify_token)):
-    return {"message": "Hello, " + user_info["name"]}
+    return {"message": "Hello, {user}!".format(**user_info)}
 
 
 # Example function using dependency tag if user info is not needed beyond authentication
@@ -73,8 +84,8 @@ async def upload_file(file: UploadFile = File(...)):
     chunks = text_splitter.split_text(text)
 
     # Generate embeddings
-    embeddings = OpenAIEmbeddings()
-    vectors = embeddings.embed_documents(chunks)
+    # embeddings = OpenAIEmbeddings()
+    # vectors = embeddings.embed_documents(chunks)
 
     # TODO: add FAISS vector store
     # Store embeddings in a vector store
