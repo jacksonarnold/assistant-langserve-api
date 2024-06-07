@@ -3,12 +3,15 @@ from fastapi.security import OAuth2PasswordBearer
 from google.auth.transport import requests
 from google.oauth2 import id_token
 from . import config
+import firebase_admin
+from firebase_admin import auth
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-
 CLIENT_ID = config.CLIENT_ID
+default_app = firebase_admin.initialize_app()
 
 
+# id_token comes from the client app (shown above)
 async def verify_token(token: str = Depends(oauth2_scheme)):
     try:
         id_info = id_token.verify_oauth2_token(token, requests.Request(), CLIENT_ID)
@@ -18,6 +21,20 @@ async def verify_token(token: str = Depends(oauth2_scheme)):
 
         return id_info
 
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from e
+
+
+async def verify_firebase_token(token: str = Depends(oauth2_scheme)):
+    try:
+        decoded_token = auth.verify_id_token(id_token)
+        uid = decoded_token['uid']
+
+        return uid
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
