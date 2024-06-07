@@ -10,6 +10,7 @@ from starlette import status
 from starlette.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer
 from .auth import verify_token
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="LangChain Server",
