@@ -1,3 +1,4 @@
+from langchain_core.runnables import chain
 from tempfile import NamedTemporaryFile
 from fastapi.responses import RedirectResponse
 from langchain.chains.llm import LLMChain
@@ -11,6 +12,7 @@ from starlette.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer
 from .auth import verify_token
 from fastapi.middleware.cors import CORSMiddleware
+from langchain_core.output_parsers import StrOutputParser
 
 app = FastAPI(
     title="LangChain Server",
@@ -27,6 +29,7 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
+model_gpt4 = ChatOpenAI(model="gpt-4")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
@@ -35,12 +38,6 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 @app.get("/api/protected")
 async def protected_route(user_info: dict = Depends(verify_token)):
     return {"message": "Hello, {user}!".format(**user_info)}
-
-
-# Example function using dependency tag if user info is not needed beyond authentication
-@app.get("/api/other-protected", dependencies=[Depends(verify_token)])
-async def other_protected_route():
-    return {"message": "Hello, person"}
 
 
 @app.get("/")
@@ -52,6 +49,21 @@ add_routes(
     app,
     ChatOpenAI(),
     path="/openai",
+)
+
+
+@chain
+def custom_chain(text):
+    prompt = PromptTemplate.from_template("tell me a short joke about {topic}")
+    output_parser = StrOutputParser()
+
+    return prompt | model_gpt4 | output_parser
+
+
+add_routes(
+    app,
+    custom_chain,
+    path="/test-chain"
 )
 
 
