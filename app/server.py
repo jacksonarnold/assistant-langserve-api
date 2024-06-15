@@ -1,3 +1,5 @@
+import base64
+
 from langchain_core.runnables import chain
 from tempfile import NamedTemporaryFile
 from fastapi.responses import RedirectResponse
@@ -5,14 +7,18 @@ from langchain.chains.llm import LLMChain
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings, OpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langserve import add_routes
+from langserve import add_routes, CustomUserType
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
-from starlette import status
-from starlette.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer
 from .auth import verify_token
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.output_parsers import StrOutputParser
+from langchain.pydantic_v1 import Field
+from langchain_core.runnables import RunnableLambda
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.vectorstores import FAISS
+from langchain.chains.summarize import load_summarize_chain
+from langchain import OpenAI
 
 app = FastAPI(
     title="LangChain Server",
@@ -30,7 +36,6 @@ app.add_middleware(
 )
 
 model_gpt4 = ChatOpenAI(model="gpt-4")
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
@@ -63,61 +68,74 @@ def custom_chain(text):
 add_routes(
     app,
     custom_chain,
-    path="/test-chain"
+    path="/tell-joke"
 )
 
 
-@app.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
-    # Save the uploaded file to a temporary location
+class FileProcessingRequest(CustomUserType):
+    """Request including a base64 encoded file."""
+
+    # The extra field is used to specify a widget for the playground UI.
+    file: str = Field(..., extra={"widget": {"type": "base64file"}})
+    num_chars: int = 100
+    prompt: str
+
+
+def map_reduce_doc(file: FileProcessingRequest) -> str:
+    # initialize llm
+    llm = OpenAI(temperature=0)
+
+    # decode file and save to temporary location
+    decoded_data = base64.b64decode(file.file)
     with NamedTemporaryFile(delete=False) as tmp_file:
-        tmp_file.write(await file.read())
+        tmp_file.write(decoded_data)
         tmp_file_path = tmp_file.name
 
-    if file.content_type == 'application/pdf':
-        from langchain_community.document_loaders import PyPDFLoader
-        loader = PyPDFLoader(tmp_file_path)
-    elif file.content_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-        from langchain_community.document_loaders import Docx2txtLoader
-        loader = Docx2txtLoader(tmp_file_path)
-    elif file.content_type == 'text/plain':
-        from langchain_community.document_loaders import TextLoader
-        loader = TextLoader(tmp_file_path)
-    else:
-        print('Document format is not supported!')
-        return HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
-
+    # load PDF documents
+    loader = PyPDFLoader(tmp_file_path)
     documents = loader.load()
 
-    # Chunk the text
-    # Extract the text content from the document
-    text = "\n".join([doc.page_content for doc in documents])
+    # create summary chain and summary
+    summary_chain = load_summarize_chain(llm=llm, chain_type='map_reduce', verbose=True)
+    output = summary_chain.run(documents)
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=20)
-    chunks = text_splitter.split_text(text)
+    return output
 
-    # Generate embeddings
-    # embeddings = OpenAIEmbeddings()
-    # vectors = embeddings.embed_documents(chunks)
 
-    # TODO: add FAISS vector store
-    # Store embeddings in a vector store
-    # vector_store = FAISS()
-    # vector_store.add_documents(chunks, vectors)
+add_routes(
+    app,
+    RunnableLambda(map_reduce_doc).with_types(input_type=FileProcessingRequest),
+    path="/mapreduce",
+)
 
-    # Create a summarization chain
-    prompt_template = PromptTemplate.from_template("Summarize the following text: {text}")
-    summarization_chain = LLMChain(
-        llm=OpenAI(),
-        prompt=prompt_template
-    )
 
-    summaries = []
-    for chunk in chunks:
-        summary = summarization_chain.run({"text": chunk})
-        summaries.append(summary)
+def vector_search(request: FileProcessingRequest) -> str:
+    # decode file and save to temporary location
+    decoded_data = base64.b64decode(request.file)
+    with NamedTemporaryFile(delete=False) as tmp_file:
+        tmp_file.write(decoded_data)
+        tmp_file_path = tmp_file.name
 
-    return JSONResponse(content={"summaries": summaries})
+    # load PDF documents
+    loader = PyPDFLoader(tmp_file_path)
+    documents = loader.load()
+
+    # create a vector store using documents and embeddings
+    db = FAISS.from_documents(documents, OpenAIEmbeddings())
+
+    # perform similarity search using passed prompt
+    docs = db.similarity_search(request.prompt)
+    response_text = docs[0].page_content
+    print(response_text)
+
+    return response_text
+
+
+add_routes(
+    app,
+    RunnableLambda(vector_search).with_types(input_type=FileProcessingRequest),
+    path="/vector_search",
+)
 
 
 if __name__ == "__main__":
