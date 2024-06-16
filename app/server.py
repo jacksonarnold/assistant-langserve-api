@@ -16,7 +16,7 @@ from langchain_core.runnables import RunnableLambda
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain.chains.summarize import load_summarize_chain
-from langchain import OpenAI
+from langchain_openai import OpenAI
 
 app = FastAPI(
     title="LangChain Server",
