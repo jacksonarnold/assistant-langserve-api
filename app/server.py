@@ -3,12 +3,10 @@ import base64
 from langchain_core.runnables import chain
 from tempfile import NamedTemporaryFile
 from fastapi.responses import RedirectResponse
-from langchain.chains.llm import LLMChain
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings, OpenAI
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langserve import add_routes, CustomUserType
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, Depends
 from fastapi.security import OAuth2PasswordBearer
 from .auth import verify_token
 from fastapi.middleware.cors import CORSMiddleware
@@ -77,7 +75,6 @@ class FileProcessingRequest(CustomUserType):
 
     # The extra field is used to specify a widget for the playground UI.
     file: str = Field(..., extra={"widget": {"type": "base64file"}})
-    num_chars: int = 100
     prompt: str
 
 
