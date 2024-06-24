@@ -1,22 +1,21 @@
-import base64
-
 from langchain_core.runnables import chain
-from tempfile import NamedTemporaryFile
 from fastapi.responses import RedirectResponse
 from langchain_core.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings, OpenAI
-from langserve import add_routes, CustomUserType
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langserve import add_routes
 from fastapi import FastAPI, Depends
 from fastapi.security import OAuth2PasswordBearer
-from .auth import verify_token
+from app.classes.file_processing_req import FileProcessingRequest
+from app.utils.auth import verify_token
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.output_parsers import StrOutputParser
-from langchain.pydantic_v1 import Field
 from langchain_core.runnables import RunnableLambda
-from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain.chains.summarize import load_summarize_chain
 from langchain_openai import OpenAI
+from langchain_nvidia_ai_endpoints import ChatNVIDIA
+from app.utils.document_helper import load_pdf_documents
+
 
 app = FastAPI(
     title="LangChain Server",
@@ -70,27 +69,11 @@ add_routes(
 )
 
 
-class FileProcessingRequest(CustomUserType):
-    """Request including a base64 encoded file."""
-
-    # The extra field is used to specify a widget for the playground UI.
-    file: str = Field(..., extra={"widget": {"type": "base64file"}})
-    prompt: str
-
-
 def map_reduce_doc(file: FileProcessingRequest) -> str:
-    # initialize llm
-    llm = OpenAI(temperature=0)
+    # initialize llm and load documents
+    llm = ChatNVIDIA(model="meta/llama3-70b-instruct")
 
-    # decode file and save to temporary location
-    decoded_data = base64.b64decode(file.file)
-    with NamedTemporaryFile(delete=False) as tmp_file:
-        tmp_file.write(decoded_data)
-        tmp_file_path = tmp_file.name
-
-    # load PDF documents
-    loader = PyPDFLoader(tmp_file_path)
-    documents = loader.load()
+    documents = load_pdf_documents(file)
 
     # create summary chain and summary
     summary_chain = load_summarize_chain(llm=llm, chain_type='map_reduce', verbose=True)
@@ -106,16 +89,27 @@ add_routes(
 )
 
 
-def vector_search(request: FileProcessingRequest) -> str:
-    # decode file and save to temporary location
-    decoded_data = base64.b64decode(request.file)
-    with NamedTemporaryFile(delete=False) as tmp_file:
-        tmp_file.write(decoded_data)
-        tmp_file_path = tmp_file.name
+def summarize_chain(file: FileProcessingRequest) -> str:
+    # initialize llm and load documents
+    llm = OpenAI(temperature=0)
+    documents = load_pdf_documents(file)
 
-    # load PDF documents
-    loader = PyPDFLoader(tmp_file_path)
-    documents = loader.load()
+    # create summary chain and summary
+    summary_chain = load_summarize_chain(llm=llm, chain_type='map_reduce', verbose=True)
+    output = summary_chain.run(documents)
+
+    return output
+
+
+add_routes(
+    app,
+    RunnableLambda(summarize_chain).with_types(input_type=FileProcessingRequest),
+    path="/summarize-chain",
+)
+
+
+def vector_search(request: FileProcessingRequest) -> str:
+    documents = load_pdf_documents(request)
 
     # create a vector store using documents and embeddings
     db = FAISS.from_documents(documents, OpenAIEmbeddings())
