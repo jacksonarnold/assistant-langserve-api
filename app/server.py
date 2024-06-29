@@ -15,7 +15,11 @@ from langchain.chains.summarize import load_summarize_chain
 from langchain_openai import OpenAI
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from app.utils.document_helper import load_pdf_documents
-
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.prompts import ChatPromptTemplate
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain
+from langchain_core.messages import HumanMessage, AIMessage
 
 app = FastAPI(
     title="LangChain Server",
@@ -32,7 +36,7 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-model_gpt4 = ChatOpenAI(model="gpt-4")
+llm = ChatOpenAI(model="gpt-4")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
@@ -59,7 +63,7 @@ def custom_chain(text):
     prompt = PromptTemplate.from_template("tell me a short joke about {topic}")
     output_parser = StrOutputParser()
 
-    return prompt | model_gpt4 | output_parser
+    return prompt | llm | output_parser
 
 
 add_routes(
@@ -72,7 +76,6 @@ add_routes(
 def map_reduce_doc(file: FileProcessingRequest) -> str:
     # initialize llm and load documents
     llm = ChatNVIDIA(model="meta/llama3-70b-instruct")
-
     documents = load_pdf_documents(file)
 
     # create summary chain and summary
@@ -91,11 +94,11 @@ add_routes(
 
 def summarize_chain(file: FileProcessingRequest) -> str:
     # initialize llm and load documents
-    llm = OpenAI(temperature=0)
+    model_openai = OpenAI(temperature=0)
     documents = load_pdf_documents(file)
 
     # create summary chain and summary
-    summary_chain = load_summarize_chain(llm=llm, chain_type='map_reduce', verbose=True)
+    summary_chain = load_summarize_chain(llm=model_openai, chain_type='map_reduce', verbose=True)
     output = summary_chain.run(documents)
 
     return output
@@ -126,6 +129,41 @@ add_routes(
     app,
     RunnableLambda(vector_search).with_types(input_type=FileProcessingRequest),
     path="/vector_search",
+)
+
+
+def retrieval_agent(request: FileProcessingRequest):
+    documents = load_pdf_documents(request)
+    embeddings = OpenAIEmbeddings()
+
+    # create a vector store using documents and embeddings
+    text_splitter = RecursiveCharacterTextSplitter()
+    docs = text_splitter.split_documents(documents)
+    vector = FAISS.from_documents(docs, embeddings)
+
+    prompt = ChatPromptTemplate.from_template("""Answer the following question based only on the provided context:
+    <context>
+    {context}
+    </context>
+    
+    Question: {input}""")
+
+    document_chain = create_stuff_documents_chain(llm, prompt)
+
+    retriever = vector.as_retriever()
+    retrieval_chain = create_retrieval_chain(retriever, document_chain)
+
+    chat_history = [HumanMessage(content="Can you summarize resumes?"), AIMessage(content="Yes!")]
+    return retrieval_chain.invoke({
+        "chat_history": chat_history,
+        "input": request.prompt
+    })
+
+
+add_routes(
+    app,
+    RunnableLambda(retrieval_agent).with_types(input_type=FileProcessingRequest),
+    path="/retrieval_agent",
 )
 
 
