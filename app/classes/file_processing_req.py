@@ -1,10 +1,7 @@
-from langserve import CustomUserType
-from langchain.pydantic_v1 import Field
+from pydantic import BaseModel, Field
 
 
-class FileProcessingRequest(CustomUserType):
-    """Request including a base64 encoded file."""
-
-    # The extra field is used to specify a widget for the playground UI.
-    file: str = Field(..., extra={"widget": {"type": "base64file"}})
-    prompt: str
+class PDFInput(BaseModel):
+    pdf_source: str = Field(..., description="URL or file path to the PDF",
+                            extra={"widget": {"type": "base64file"}})
+    query: str = Field(..., description="Query to run on the PDF content")
