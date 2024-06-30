@@ -1,22 +1,25 @@
-import base64
-
 from langchain_core.runnables import chain
-from tempfile import NamedTemporaryFile
 from fastapi.responses import RedirectResponse
 from langchain_core.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings, OpenAI
-from langserve import add_routes, CustomUserType
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langserve import add_routes
 from fastapi import FastAPI, Depends
 from fastapi.security import OAuth2PasswordBearer
-from .auth import verify_token
+from app.classes.file_processing_req import PDFInput
+from app.utils.auth import verify_token
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.output_parsers import StrOutputParser
-from langchain.pydantic_v1 import Field
-from langchain_core.runnables import RunnableLambda
-from langchain_community.document_loaders import PyPDFLoader
+from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 from langchain_community.vectorstores import FAISS
 from langchain.chains.summarize import load_summarize_chain
-from langchain import OpenAI
+from langchain_openai import OpenAI
+from langchain_nvidia_ai_endpoints import ChatNVIDIA
+from app.utils.document_helper import load_pdf, combine_docs
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.prompts import ChatPromptTemplate
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain
+from langchain_core.messages import HumanMessage, AIMessage
 
 app = FastAPI(
     title="LangChain Server",
@@ -33,7 +36,7 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-model_gpt4 = ChatOpenAI(model="gpt-4")
+llm = ChatOpenAI(model="gpt-4")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
@@ -50,7 +53,7 @@ async def redirect_root_to_docs():
 
 add_routes(
     app,
-    ChatOpenAI(),
+    llm,
     path="/openai",
 )
 
@@ -60,7 +63,7 @@ def custom_chain(text):
     prompt = PromptTemplate.from_template("tell me a short joke about {topic}")
     output_parser = StrOutputParser()
 
-    return prompt | model_gpt4 | output_parser
+    return prompt | llm | output_parser
 
 
 add_routes(
@@ -70,30 +73,13 @@ add_routes(
 )
 
 
-class FileProcessingRequest(CustomUserType):
-    """Request including a base64 encoded file."""
-
-    # The extra field is used to specify a widget for the playground UI.
-    file: str = Field(..., extra={"widget": {"type": "base64file"}})
-    prompt: str
-
-
-def map_reduce_doc(file: FileProcessingRequest) -> str:
-    # initialize llm
-    llm = OpenAI(temperature=0)
-
-    # decode file and save to temporary location
-    decoded_data = base64.b64decode(file.file)
-    with NamedTemporaryFile(delete=False) as tmp_file:
-        tmp_file.write(decoded_data)
-        tmp_file_path = tmp_file.name
-
-    # load PDF documents
-    loader = PyPDFLoader(tmp_file_path)
-    documents = loader.load()
+def map_reduce_doc(file: PDFInput) -> str:
+    # initialize llm and load documents
+    documents = load_pdf(file.pdf_source)
 
     # create summary chain and summary
-    summary_chain = load_summarize_chain(llm=llm, chain_type='map_reduce', verbose=True)
+    summary_chain = load_summarize_chain(llm=ChatNVIDIA(model="meta/llama3-70b-instruct"),
+                                         chain_type='map_reduce', verbose=True)
     output = summary_chain.run(documents)
 
     return output
@@ -101,27 +87,38 @@ def map_reduce_doc(file: FileProcessingRequest) -> str:
 
 add_routes(
     app,
-    RunnableLambda(map_reduce_doc).with_types(input_type=FileProcessingRequest),
+    RunnableLambda(map_reduce_doc).with_types(input_type=PDFInput),
     path="/mapreduce",
 )
 
 
-def vector_search(request: FileProcessingRequest) -> str:
-    # decode file and save to temporary location
-    decoded_data = base64.b64decode(request.file)
-    with NamedTemporaryFile(delete=False) as tmp_file:
-        tmp_file.write(decoded_data)
-        tmp_file_path = tmp_file.name
+def summarize_chain(file: PDFInput) -> str:
+    # initialize llm and load documents
+    model_openai = OpenAI(temperature=0)
+    documents = load_pdf(file.pdf_source)
 
-    # load PDF documents
-    loader = PyPDFLoader(tmp_file_path)
-    documents = loader.load()
+    # create summary chain and summary
+    summary_chain = load_summarize_chain(llm=model_openai, chain_type='map_reduce', verbose=True)
+    output = summary_chain.run(documents)
+
+    return output
+
+
+add_routes(
+    app,
+    RunnableLambda(summarize_chain).with_types(input_type=PDFInput),
+    path="/summarize-chain",
+)
+
+
+def vector_search(request: PDFInput) -> str:
+    documents = load_pdf(request.pdf_source)
 
     # create a vector store using documents and embeddings
     db = FAISS.from_documents(documents, OpenAIEmbeddings())
 
     # perform similarity search using passed prompt
-    docs = db.similarity_search(request.prompt)
+    docs = db.similarity_search(request.query)
     response_text = docs[0].page_content
     print(response_text)
 
@@ -130,9 +127,65 @@ def vector_search(request: FileProcessingRequest) -> str:
 
 add_routes(
     app,
-    RunnableLambda(vector_search).with_types(input_type=FileProcessingRequest),
+    RunnableLambda(vector_search).with_types(input_type=PDFInput),
     path="/vector_search",
 )
+
+
+def retrieval_agent(request: PDFInput):
+    documents = load_pdf(request.pdf_source)
+    embeddings = OpenAIEmbeddings()
+
+    # create a vector store using documents and embeddings
+    text_splitter = RecursiveCharacterTextSplitter()
+    docs = text_splitter.split_documents(documents)
+    vector = FAISS.from_documents(docs, embeddings)
+
+    prompt = ChatPromptTemplate.from_template("""Answer the following question based only on the provided context:
+    <context>
+    {context}
+    </context>
+    
+    Question: {input}""")
+
+    document_chain = create_stuff_documents_chain(llm, prompt)
+
+    retriever = vector.as_retriever()
+    retrieval_chain = create_retrieval_chain(retriever, document_chain)
+
+    chat_history = [HumanMessage(content="Can you summarize resumes?"), AIMessage(content="Yes!")]
+    return retrieval_chain.invoke({
+        "chat_history": chat_history,
+        "input": request.query
+    })
+
+
+add_routes(
+    app,
+    RunnableLambda(retrieval_agent).with_types(input_type=PDFInput),
+    path="/retrieval_agent",
+)
+
+
+# define runnable chain that takes in PDF document as a parameter
+pdf_qa_chain = (
+        RunnablePassthrough()
+        | {
+            "docs": lambda x: load_pdf(x["pdf_source"]),
+            "query": lambda x: x["query"]
+        }
+        | {
+            "text": lambda x: combine_docs(x["docs"]),
+            "query": lambda x: x["query"]
+        }
+        | ChatPromptTemplate.from_template("""Using the following text:
+            {text}
+            
+            Answer the following question: {query}""")
+        | llm
+)
+
+add_routes(app, pdf_qa_chain, path="/pdf_qa", input_type=PDFInput)
 
 
 if __name__ == "__main__":

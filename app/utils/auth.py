@@ -2,7 +2,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from google.auth.transport import requests
 from google.oauth2 import id_token
-from . import config
+from app import config
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
