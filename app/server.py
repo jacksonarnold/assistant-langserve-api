@@ -180,8 +180,8 @@ pdf_qa_chain = (
         }
         | ChatPromptTemplate.from_template("""Using the following text:
             {text}
-        
-        Answer the following question: {query}""")
+            
+            Answer the following question: {query}""")
         | llm
 )
 
