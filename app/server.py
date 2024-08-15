@@ -1,3 +1,7 @@
+from email.header import Header
+from http.client import HTTPException
+from typing import Annotated
+
 from langchain_core.runnables import chain
 from fastapi.responses import RedirectResponse
 from langchain_core.prompts import PromptTemplate
@@ -43,7 +47,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 # Example function using dependency parameter if user info IS needed beyond authentication
 @app.get("/api/protected")
 async def protected_route(user_info: dict = Depends(verify_token)):
-    return {"message": "Hello, {user}!".format(**user_info)}
+    return {"message": user_info["name"]}
 
 
 @app.get("/")
@@ -69,7 +73,8 @@ def custom_chain(text):
 add_routes(
     app,
     custom_chain,
-    path="/tell-joke"
+    path="/tell-joke",
+    dependencies=[Depends(verify_token)],
 )
 
 
@@ -163,26 +168,26 @@ def retrieval_agent(request: PDFInput):
 add_routes(
     app,
     RunnableLambda(retrieval_agent).with_types(input_type=PDFInput),
-    path="/retrieval_agent",
+    path="/retrieval_agent"
 )
 
 
 # define runnable chain that takes in PDF document as a parameter
 pdf_qa_chain = (
-        RunnablePassthrough()
-        | {
-            "docs": lambda x: load_pdf(x["pdf_source"]),
-            "query": lambda x: x["query"]
-        }
-        | {
-            "text": lambda x: combine_docs(x["docs"]),
-            "query": lambda x: x["query"]
-        }
-        | ChatPromptTemplate.from_template("""Using the following text:
-            {text}
-            
-            Answer the following question: {query}""")
-        | llm
+    RunnablePassthrough()
+    | {
+        "docs": lambda x: load_pdf(x["pdf_source"]),
+        "query": lambda x: x["query"]
+    }
+    | {
+        "text": lambda x: combine_docs(x["docs"]),
+        "query": lambda x: x["query"]
+    }
+    | ChatPromptTemplate.from_template("""Using the following text:
+        {text}
+        
+        Answer the following question: {query}""")
+    | llm
 )
 
 add_routes(app, pdf_qa_chain, path="/pdf_qa", input_type=PDFInput)

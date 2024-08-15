@@ -11,6 +11,7 @@ CLIENT_ID = config.CLIENT_ID
 
 async def verify_token(token: str = Depends(oauth2_scheme)):
     try:
+        print("Token", token)
         id_info = id_token.verify_oauth2_token(token, requests.Request(), CLIENT_ID)
 
         if id_info['iss'] not in ['accounts.google.com', 'https://accounts.google.com']:
@@ -21,6 +22,6 @@ async def verify_token(token: str = Depends(oauth2_scheme)):
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token",
+            detail="You fucked up",
             headers={"WWW-Authenticate": "Bearer"},
         ) from e
