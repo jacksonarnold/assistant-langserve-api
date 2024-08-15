@@ -1,7 +1,3 @@
-from email.header import Header
-from http.client import HTTPException
-from typing import Annotated
-
 from langchain_core.runnables import chain
 from fastapi.responses import RedirectResponse
 from langchain_core.prompts import PromptTemplate
@@ -51,7 +47,7 @@ async def protected_route(user_info: dict = Depends(verify_token)):
 
 
 @app.get("/")
-async def redirect_root_to_docs():
+async def redirect_root_to_docs(user_info: dict = Depends(verify_token)):
     return RedirectResponse("/docs")
 
 
@@ -59,6 +55,7 @@ add_routes(
     app,
     llm,
     path="/openai",
+    dependencies=[Depends(verify_token)],
 )
 
 
@@ -94,6 +91,7 @@ add_routes(
     app,
     RunnableLambda(map_reduce_doc).with_types(input_type=PDFInput),
     path="/mapreduce",
+    dependencies=[Depends(verify_token)],
 )
 
 
@@ -113,6 +111,7 @@ add_routes(
     app,
     RunnableLambda(summarize_chain).with_types(input_type=PDFInput),
     path="/summarize-chain",
+    dependencies=[Depends(verify_token)],
 )
 
 
@@ -134,6 +133,7 @@ add_routes(
     app,
     RunnableLambda(vector_search).with_types(input_type=PDFInput),
     path="/vector_search",
+    dependencies=[Depends(verify_token)],
 )
 
 
@@ -168,7 +168,8 @@ def retrieval_agent(request: PDFInput):
 add_routes(
     app,
     RunnableLambda(retrieval_agent).with_types(input_type=PDFInput),
-    path="/retrieval_agent"
+    path="/retrieval_agent",
+    dependencies=[Depends(verify_token)],
 )
 
 
@@ -190,7 +191,13 @@ pdf_qa_chain = (
     | llm
 )
 
-add_routes(app, pdf_qa_chain, path="/pdf_qa", input_type=PDFInput)
+add_routes(
+    app,
+    pdf_qa_chain,
+    path="/pdf_qa",
+    input_type=PDFInput,
+    dependencies=[Depends(verify_token)]
+)
 
 
 if __name__ == "__main__":
