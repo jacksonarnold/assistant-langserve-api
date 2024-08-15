@@ -24,6 +24,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 app = FastAPI(
     title="LangChain Server",
     version="1.0",
+    dependencies=[Depends(verify_token)],
 )
 
 # Set all CORS enabled origins
@@ -55,7 +56,6 @@ add_routes(
     app,
     llm,
     path="/openai",
-    dependencies=[Depends(verify_token)],
 )
 
 
@@ -71,7 +71,6 @@ add_routes(
     app,
     custom_chain,
     path="/tell-joke",
-    dependencies=[Depends(verify_token)],
 )
 
 
@@ -91,7 +90,6 @@ add_routes(
     app,
     RunnableLambda(map_reduce_doc).with_types(input_type=PDFInput),
     path="/mapreduce",
-    dependencies=[Depends(verify_token)],
 )
 
 
@@ -111,7 +109,6 @@ add_routes(
     app,
     RunnableLambda(summarize_chain).with_types(input_type=PDFInput),
     path="/summarize-chain",
-    dependencies=[Depends(verify_token)],
 )
 
 
@@ -133,7 +130,6 @@ add_routes(
     app,
     RunnableLambda(vector_search).with_types(input_type=PDFInput),
     path="/vector_search",
-    dependencies=[Depends(verify_token)],
 )
 
 
@@ -169,7 +165,6 @@ add_routes(
     app,
     RunnableLambda(retrieval_agent).with_types(input_type=PDFInput),
     path="/retrieval_agent",
-    dependencies=[Depends(verify_token)],
 )
 
 
@@ -196,7 +191,6 @@ add_routes(
     pdf_qa_chain,
     path="/pdf_qa",
     input_type=PDFInput,
-    dependencies=[Depends(verify_token)]
 )
 
 

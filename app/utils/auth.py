@@ -11,7 +11,6 @@ CLIENT_ID = config.CLIENT_ID
 
 async def verify_token(token: str = Depends(oauth2_scheme)):
     try:
-        print("Token", token)
         id_info = id_token.verify_oauth2_token(token, requests.Request(), CLIENT_ID)
 
         if id_info['iss'] not in ['accounts.google.com', 'https://accounts.google.com']:
