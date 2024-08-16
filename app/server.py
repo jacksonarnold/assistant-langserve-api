@@ -24,6 +24,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 app = FastAPI(
     title="LangChain Server",
     version="1.0",
+    dependencies=[Depends(verify_token)],
 )
 
 # Set all CORS enabled origins
@@ -43,11 +44,11 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 # Example function using dependency parameter if user info IS needed beyond authentication
 @app.get("/api/protected")
 async def protected_route(user_info: dict = Depends(verify_token)):
-    return {"message": "Hello, {user}!".format(**user_info)}
+    return {"message": user_info["name"]}
 
 
 @app.get("/")
-async def redirect_root_to_docs():
+async def redirect_root_to_docs(user_info: dict = Depends(verify_token)):
     return RedirectResponse("/docs")
 
 
@@ -69,7 +70,7 @@ def custom_chain(text):
 add_routes(
     app,
     custom_chain,
-    path="/tell-joke"
+    path="/tell-joke",
 )
 
 
@@ -169,23 +170,28 @@ add_routes(
 
 # define runnable chain that takes in PDF document as a parameter
 pdf_qa_chain = (
-        RunnablePassthrough()
-        | {
-            "docs": lambda x: load_pdf(x["pdf_source"]),
-            "query": lambda x: x["query"]
-        }
-        | {
-            "text": lambda x: combine_docs(x["docs"]),
-            "query": lambda x: x["query"]
-        }
-        | ChatPromptTemplate.from_template("""Using the following text:
-            {text}
-            
-            Answer the following question: {query}""")
-        | llm
+    RunnablePassthrough()
+    | {
+        "docs": lambda x: load_pdf(x["pdf_source"]),
+        "query": lambda x: x["query"]
+    }
+    | {
+        "text": lambda x: combine_docs(x["docs"]),
+        "query": lambda x: x["query"]
+    }
+    | ChatPromptTemplate.from_template("""Using the following text:
+        {text}
+        
+        Answer the following question: {query}""")
+    | llm
 )
 
-add_routes(app, pdf_qa_chain, path="/pdf_qa", input_type=PDFInput)
+add_routes(
+    app,
+    pdf_qa_chain,
+    path="/pdf_qa",
+    input_type=PDFInput,
+)
 
 
 if __name__ == "__main__":
