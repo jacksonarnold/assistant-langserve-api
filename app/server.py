@@ -1,99 +1,197 @@
-from tempfile import NamedTemporaryFile
+from langchain_core.runnables import chain
 from fastapi.responses import RedirectResponse
-from langchain.chains.llm import LLMChain
 from langchain_core.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings, OpenAI
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langserve import add_routes
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
-from starlette import status
-from starlette.responses import JSONResponse
+from fastapi import FastAPI, Depends
 from fastapi.security import OAuth2PasswordBearer
-from .auth import verify_token
+from app.classes.file_processing_req import PDFInput
+from app.utils.auth import verify_token
+from fastapi.middleware.cors import CORSMiddleware
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableLambda, RunnablePassthrough
+from langchain_community.vectorstores import FAISS
+from langchain.chains.summarize import load_summarize_chain
+from langchain_openai import OpenAI
+from langchain_nvidia_ai_endpoints import ChatNVIDIA
+from app.utils.document_helper import load_pdf, combine_docs
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.prompts import ChatPromptTemplate
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain
+from langchain_core.messages import HumanMessage, AIMessage
 
 app = FastAPI(
     title="LangChain Server",
     version="1.0",
+    dependencies=[Depends(verify_token)],
 )
 
+# Set all CORS enabled origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
+
+llm = ChatOpenAI(model="gpt-4")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
 # Example function using dependency parameter if user info IS needed beyond authentication
 @app.get("/api/protected")
 async def protected_route(user_info: dict = Depends(verify_token)):
-    return {"message": "Hello, " + user_info["name"]}
-
-
-# Example function using dependency tag if user info is not needed beyond authentication
-@app.get("/api/other-protected", dependencies=[Depends(verify_token)])
-async def other_protected_route():
-    return {"message": "Hello, person"}
+    return {"message": user_info["name"]}
 
 
 @app.get("/")
-async def redirect_root_to_docs():
+async def redirect_root_to_docs(user_info: dict = Depends(verify_token)):
     return RedirectResponse("/docs")
 
 
 add_routes(
     app,
-    ChatOpenAI(),
+    llm,
     path="/openai",
 )
 
 
-@app.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
-    # Save the uploaded file to a temporary location
-    with NamedTemporaryFile(delete=False) as tmp_file:
-        tmp_file.write(await file.read())
-        tmp_file_path = tmp_file.name
+@chain
+def custom_chain(text):
+    prompt = PromptTemplate.from_template("tell me a short joke about {topic}")
+    output_parser = StrOutputParser()
 
-    if file.content_type == 'application/pdf':
-        from langchain_community.document_loaders import PyPDFLoader
-        loader = PyPDFLoader(tmp_file_path)
-    elif file.content_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-        from langchain_community.document_loaders import Docx2txtLoader
-        loader = Docx2txtLoader(tmp_file_path)
-    elif file.content_type == 'text/plain':
-        from langchain_community.document_loaders import TextLoader
-        loader = TextLoader(tmp_file_path)
-    else:
-        print('Document format is not supported!')
-        return HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
+    return prompt | llm | output_parser
 
-    documents = loader.load()
 
-    # Chunk the text
-    # Extract the text content from the document
-    text = "\n".join([doc.page_content for doc in documents])
+add_routes(
+    app,
+    custom_chain,
+    path="/tell-joke",
+)
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=20)
-    chunks = text_splitter.split_text(text)
 
-    # Generate embeddings
+def map_reduce_doc(file: PDFInput) -> str:
+    # initialize llm and load documents
+    documents = load_pdf(file.pdf_source)
+
+    # create summary chain and summary
+    summary_chain = load_summarize_chain(llm=ChatNVIDIA(model="meta/llama3-70b-instruct"),
+                                         chain_type='map_reduce', verbose=True)
+    output = summary_chain.run(documents)
+
+    return output
+
+
+add_routes(
+    app,
+    RunnableLambda(map_reduce_doc).with_types(input_type=PDFInput),
+    path="/mapreduce",
+)
+
+
+def summarize_chain(file: PDFInput) -> str:
+    # initialize llm and load documents
+    model_openai = OpenAI(temperature=0)
+    documents = load_pdf(file.pdf_source)
+
+    # create summary chain and summary
+    summary_chain = load_summarize_chain(llm=model_openai, chain_type='map_reduce', verbose=True)
+    output = summary_chain.run(documents)
+
+    return output
+
+
+add_routes(
+    app,
+    RunnableLambda(summarize_chain).with_types(input_type=PDFInput),
+    path="/summarize-chain",
+)
+
+
+def vector_search(request: PDFInput) -> str:
+    documents = load_pdf(request.pdf_source)
+
+    # create a vector store using documents and embeddings
+    db = FAISS.from_documents(documents, OpenAIEmbeddings())
+
+    # perform similarity search using passed prompt
+    docs = db.similarity_search(request.query)
+    response_text = docs[0].page_content
+    print(response_text)
+
+    return response_text
+
+
+add_routes(
+    app,
+    RunnableLambda(vector_search).with_types(input_type=PDFInput),
+    path="/vector_search",
+)
+
+
+def retrieval_agent(request: PDFInput):
+    documents = load_pdf(request.pdf_source)
     embeddings = OpenAIEmbeddings()
-    vectors = embeddings.embed_documents(chunks)
 
-    # TODO: add FAISS vector store
-    # Store embeddings in a vector store
-    # vector_store = FAISS()
-    # vector_store.add_documents(chunks, vectors)
+    # create a vector store using documents and embeddings
+    text_splitter = RecursiveCharacterTextSplitter()
+    docs = text_splitter.split_documents(documents)
+    vector = FAISS.from_documents(docs, embeddings)
 
-    # Create a summarization chain
-    prompt_template = PromptTemplate.from_template("Summarize the following text: {text}")
-    summarization_chain = LLMChain(
-        llm=OpenAI(),
-        prompt=prompt_template
-    )
+    prompt = ChatPromptTemplate.from_template("""Answer the following question based only on the provided context:
+    <context>
+    {context}
+    </context>
+    
+    Question: {input}""")
 
-    summaries = []
-    for chunk in chunks:
-        summary = summarization_chain.run({"text": chunk})
-        summaries.append(summary)
+    document_chain = create_stuff_documents_chain(llm, prompt)
 
-    return JSONResponse(content={"summaries": summaries})
+    retriever = vector.as_retriever()
+    retrieval_chain = create_retrieval_chain(retriever, document_chain)
+
+    chat_history = [HumanMessage(content="Can you summarize resumes?"), AIMessage(content="Yes!")]
+    return retrieval_chain.invoke({
+        "chat_history": chat_history,
+        "input": request.query
+    })
+
+
+add_routes(
+    app,
+    RunnableLambda(retrieval_agent).with_types(input_type=PDFInput),
+    path="/retrieval_agent",
+)
+
+
+# define runnable chain that takes in PDF document as a parameter
+pdf_qa_chain = (
+    RunnablePassthrough()
+    | {
+        "docs": lambda x: load_pdf(x["pdf_source"]),
+        "query": lambda x: x["query"]
+    }
+    | {
+        "text": lambda x: combine_docs(x["docs"]),
+        "query": lambda x: x["query"]
+    }
+    | ChatPromptTemplate.from_template("""Using the following text:
+        {text}
+        
+        Answer the following question: {query}""")
+    | llm
+)
+
+add_routes(
+    app,
+    pdf_qa_chain,
+    path="/pdf_qa",
+    input_type=PDFInput,
+)
 
 
 if __name__ == "__main__":
