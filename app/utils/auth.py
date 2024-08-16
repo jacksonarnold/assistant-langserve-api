@@ -21,6 +21,6 @@ async def verify_token(token: str = Depends(oauth2_scheme)):
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="You fucked up",
+            detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         ) from e
